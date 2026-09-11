@@ -187,6 +187,34 @@ function showSendSuccessToast(amount) {
         cards.forEach((card) => grid.appendChild(card));
     }
 
+    function normalizeAssetUrl(src) {
+        if (!src || src.startsWith("data:")) return src;
+        return encodeURI(src);
+    }
+
+    function bindMarketplaceImageFallback(img) {
+        const originalSrc = img.getAttribute("src");
+        if (!originalSrc) return;
+
+        const normalizedSrc = normalizeAssetUrl(originalSrc);
+        if (normalizedSrc !== originalSrc) {
+            img.setAttribute("src", normalizedSrc);
+        }
+
+        const fallbackSrc = originalSrc.replace(/\.webp$/i, ".png").replace(/\.png$/i, ".webp");
+        if (fallbackSrc !== originalSrc) {
+            img.addEventListener("error", () => {
+                const current = img.getAttribute("src");
+                if (current !== fallbackSrc) {
+                    img.setAttribute("src", fallbackSrc);
+                } else {
+                    img.style.opacity = "0.25";
+                    img.setAttribute("alt", `${img.getAttribute("alt") || "Imagen"} no disponible`);
+                }
+            }, { once: true });
+        }
+    }
+
     function loadMercadoImages() {
         shuffleMercadoCards();
         document.querySelectorAll("#mercado .item-thumb img").forEach((img) => {
@@ -194,8 +222,9 @@ function showSendSuccessToast(amount) {
             if (!src) return;
             img.loading = "eager";
             img.decoding = "async";
+            bindMarketplaceImageFallback(img);
             if (!img.complete || img.naturalWidth === 0) {
-                img.src = src;
+                img.src = normalizeAssetUrl(src);
             }
         });
     }
