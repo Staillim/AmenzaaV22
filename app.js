@@ -139,10 +139,7 @@ function escapeHtml(s) {
 const SESSION_KEY = "roblox_clone_session";
 const DEFAULT_AVATAR = "1.webp";
 function getSession() {
-    try {
-        const raw = localStorage.getItem(SESSION_KEY);
-        return raw ? JSON.parse(raw) : null;
-    } catch (_) { return null; }
+    return window.__verifiedProfile || null;
 }
 
 // Toast con checkmark negro, aparece ARRIBA (estilo Roblox)
@@ -1397,18 +1394,6 @@ function showSendSuccessToast(amount) {
         if (e.key === "Escape" && overlay.classList.contains("open")) close();
     });
 
-    // Submit demo: show spinner, close, toast
-    if (submitBtn) {
-        submitBtn.addEventListener("click", () => {
-            setButtonLoading(submitBtn, true, "Iniciando...");
-            setTimeout(() => {
-                setButtonLoading(submitBtn, false);
-                close();
-                showToast("Demo: inicio de sesión simulado");
-            }, 900);
-        });
-    }
-
     // Limpiar mensaje de error al escribir en los inputs
     overlay.querySelectorAll(".login-input").forEach((inp) => {
         inp.addEventListener("input", () => {
@@ -1421,937 +1406,139 @@ function showSendSuccessToast(amount) {
     });
 })();
 
-// ============== FIREBASE + AUTH + ADMIN ==============
+// Public profile data is only for presentation. The server authorizes every request.
 (function () {
-    if (!window.firebase || !window.__firebaseConfig) return;
-
-    try {
-        firebase.initializeApp(window.__firebaseConfig);
-    } catch (e) {
-        console.error("Firebase init error:", e);
-        return;
+    let currentUser = null;
+    localStorage.removeItem(SESSION_KEY);
+    const overlay = document.getElementById('loginModal');
+    const inputs = overlay.querySelectorAll('.login-input');
+    const oldButton = document.getElementById('loginSubmitBtn');
+    const button = oldButton.cloneNode(true);
+    oldButton.replaceWith(button);
+    let deviceId = localStorage.getItem('amenza_device');
+    if (!deviceId || !/^[a-f0-9-]{36}$/.test(deviceId)) {
+        deviceId = crypto.randomUUID();
+        localStorage.setItem('amenza_device', deviceId);
     }
-    const rtdb = firebase.database();
-    const auth = firebase.auth();
-
-    // ============== Password hashing (SHA-256 + salt) ==============
-    const SALT = "roblox-clone-salt-2024";
-    async function hashPassword(password) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(password + SALT);
-        const hash = await crypto.subtle.digest("SHA-256", data);
-        return Array.from(new Uint8Array(hash))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("");
-    }
-
-    // ============== Session ==============
-    // SESSION_KEY y getSession() están definidos globalmente arriba
-    // (para que sean accesibles desde otros IIFEs, como el de PAGO)
-    // Máximo de sesiones simultáneas por usuario (protege contra
-    // que varias personas compartan la misma cuenta)
-    const SESSIONS_MAX = 1;
-    // Si una sesión no manda heartbeat en este tiempo, se considera
-    // muerta y se libera el slot (5 min)
-    const SESSION_TTL = 5 * 60 * 1000;
-    // Cada cuánto se manda el heartbeat
-    const HEARTBEAT_INTERVAL = 60 * 1000;
-
-    function setSession(user) {
-        const session = {
-            username: user.username,
-            role: user.role,
-            authProvider: user.authProvider || (user.role === "admin" ? "firebase" : "rtdb"),
-            avatar: user.avatar || DEFAULT_AVATAR,
-            cardLast4: user.cardLast4 || stableCardLast4(user.username),
-            sessionId: user.sessionId || (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + "-" + Math.random().toString(36).slice(2)),
-            expiresAt: user.expiresAt ? (user.expiresAt.toMillis ? user.expiresAt.toMillis() : new Date(user.expiresAt).getTime()) : null,
-            loggedInAt: Date.now(),
-        };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        return session;
-    }
-    function clearSession() {
-        const sess = getSession();
-        // Limpiar la sesión activa de RTDB
-        if (sess && sess.sessionId && rtdb) {
-            try { rtdb.ref("sessions/" + sessionKey(sess.username) + "/" + sess.sessionId).remove(); } catch (_) {}
-        }
-        localStorage.removeItem(SESSION_KEY);
-    }
-    function isSessionValid(session) {
-        if (!session) return false;
-        if (!session.expiresAt) return false;
-        return session.expiresAt > Date.now();
-    }
-
-    // ============== Gestión de sesiones activas en RTDB ==============
-    // Estructura:
-    //   sessions/
-    //     {username}/
-    //       {sessionId}/
-    //         createdAt: number
-    //         lastSeen:  number
-    //         userAgent: string
-    function generateSessionId() {
-        if (crypto && crypto.randomUUID) return crypto.randomUUID();
-        return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
-    }
-    function sessionKey(username) {
-        return sanitizeKey(username);
-    }
-    async function registerSession(username, sessionId) {
-        await rtdb.ref("sessions/" + sessionKey(username) + "/" + sessionId).set({
-            createdAt: Date.now(),
-            lastSeen: Date.now(),
-            username,
-            userAgent: (navigator.userAgent || "").slice(0, 100),
+    async function api(action, data = {}) {
+        const result = await fetch('/api/account', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...data, action }), signal: AbortSignal.timeout(20000)
         });
-    }
-    // Forzar logout del usuario actual (por cuenta eliminada, expirada, etc.)
-    function forceLogout(reason) {
-        const sess = getSession();
-        if (!sess) return;
-        console.warn("[auth] Forzando logout:", reason);
-        stopHeartbeat();
-        clearSession();
-        updateAuthUI();
-        // Volver a Destacadas
-        const tab = document.querySelector('.tab[data-tab="destacadas"]');
-        if (tab) tab.click();
-        // Reabrir el modal de login y mostrar el mensaje de error
-        // (se hace en el siguiente tick para que el modal esté listo)
-        setTimeout(() => {
-            const loginOverlay = document.getElementById("loginModal");
-            if (loginOverlay) {
-                loginOverlay.classList.add("open");
-                loginOverlay.setAttribute("aria-hidden", "false");
-                document.body.style.overflow = "hidden";
-            }
-            if (typeof showLoginError === "function") {
-                showLoginError(
-                    `<strong>Sesión cerrada</strong>${escapeHtml(reason || "Tu cuenta ya no está disponible.")}`
-                );
-            } else {
-                showToast(reason || "Sesión cerrada");
-            }
-        }, 50);
-    }
-
-    async function heartbeatSession(username, sessionId) {
-        if (!username || !sessionId) return;
-        try {
-            // 1) Actualizar el heartbeat
-            await rtdb.ref("sessions/" + sessionKey(username) + "/" + sessionId + "/lastSeen").set(Date.now());
-        } catch (_) { /* ignore write errors */ }
-
-        // 2) Verificar que el usuario aún existe (si está en RTDB)
-        // Para usuarios de Auth (admin), saltamos esta verificación
-        const currentSession = getSession();
-        const shouldVerifyRtdbUser = currentSession
-            && currentSession.username === username
-            && currentSession.authProvider !== "firebase"
-            && currentSession.role !== "admin";
-        if (!shouldVerifyRtdbUser) return;
-
-        try {
-            const safeKey = sanitizeKey(username);
-            const snap = await rtdb.ref("users/" + safeKey).once("value");
-            if (!snap.exists()) {
-                // El usuario fue eliminado del admin panel
-                forceLogout(`La cuenta "${username}" fue eliminada por el administrador.`);
-                return;
-            }
-            const data = snap.val();
-            if (data && data.expiresAt && Number(data.expiresAt) < Date.now()) {
-                forceLogout(`La cuenta "${username}" ha expirado.`);
-                return;
-            }
-        } catch (_) {
-            // Si falla la lectura, no cerramos la sesión (puede ser
-            // un problema de red transitorio)
+        const body = await result.json();
+        if (!result.ok) {
+            if (result.status === 401) update(null);
+            throw new Error(body.error || 'No se pudo completar la operación.');
         }
+        return body;
     }
-    async function unregisterSession(username, sessionId) {
-        if (!username || !sessionId) return;
-        try { await rtdb.ref("sessions/" + sessionKey(username) + "/" + sessionId).remove(); } catch (_) {}
-    }
-    async function countActiveSessions(username) {
-        try {
-            const snap = await rtdb.ref("sessions/" + sessionKey(username)).once("value");
-            if (!snap.exists()) return 0;
-            const now = Date.now();
-            let count = 0;
-            snap.forEach((child) => {
-                const data = child.val();
-                if (data && (now - (data.lastSeen || 0)) < SESSION_TTL) count++;
-            });
-            return count;
-        } catch (_) { return 0; }
-    }
-    async function cleanStaleSessions(username) {
-        try {
-            const snap = await rtdb.ref("sessions/" + sessionKey(username)).once("value");
-            if (!snap.exists()) return;
-            const now = Date.now();
-            const updates = {};
-            snap.forEach((child) => {
-                const data = child.val();
-                if (!data || (now - (data.lastSeen || 0)) >= SESSION_TTL) {
-                    updates[child.key] = null;
-                }
-            });
-            if (Object.keys(updates).length > 0) {
-                await rtdb.ref("sessions/" + sessionKey(username)).update(updates);
-            }
-        } catch (_) {}
-    }
-    async function getActiveSessionList(username) {
-        try {
-            const snap = await rtdb.ref("sessions/" + sessionKey(username)).once("value");
-            if (!snap.exists()) return [];
-            const now = Date.now();
-            const list = [];
-            snap.forEach((child) => {
-                const data = child.val();
-                if (data && (now - (data.lastSeen || 0)) < SESSION_TTL) {
-                    list.push({ id: child.key, ...data });
-                }
-            });
-            return list;
-        } catch (_) { return []; }
-    }
-
-    let heartbeatTimer = null;
-    function startHeartbeat(username, sessionId) {
-        stopHeartbeat();
-        heartbeatTimer = setInterval(() => heartbeatSession(username, sessionId), HEARTBEAT_INTERVAL);
-    }
-    function stopHeartbeat() {
-        if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = null;
+    function update(user) {
+        currentUser = user;
+        window.__verifiedProfile = user;
+        const admin = user?.role === 'admin';
+        const tab = document.querySelector('.tab-admin');
+        if (tab) { tab.hidden = !admin; tab.classList.toggle('visible', admin); }
+        const trigger = document.getElementById('openLoginModal');
+        if (trigger) trigger.hidden = !!user;
+        const chip = document.querySelector('.age-bracket-label');
+        if (chip) chip.style.display = user ? '' : 'none';
+        document.querySelectorAll('.user-username-text').forEach(el => el.textContent = user?.username || '');
+        document.querySelectorAll('.user-avatar-img').forEach(el => el.src = 'recursos/iconos/' + (user?.avatar || DEFAULT_AVATAR));
+        if (!admin) {
+            document.getElementById('adminUsersList').replaceChildren();
+            if (document.querySelector('.tab[data-tab="admin"]')?.classList.contains('active')) document.querySelector('.tab[data-tab="destacadas"]')?.click();
         }
+        overlay.classList.toggle('open', !user);
+        overlay.setAttribute('aria-hidden', user ? 'true' : 'false');
+        document.body.style.overflow = user ? '' : 'hidden';
     }
-
-    // Cuando el usuario cierra la pestaña, intentar limpiar la sesión
-    // (best-effort: si el navegador no lo ejecuta, la sesión expira
-    // automáticamente por inactividad de heartbeat en SESSION_TTL)
-    window.addEventListener("pagehide", () => {
-        const sess = getSession();
-        if (sess && sess.sessionId && rtdb) {
-            try {
-                rtdb.ref("sessions/" + sessionKey(sess.username) + "/" + sess.sessionId).remove();
-            } catch (_) {}
-        }
+    async function login() {
+        if (button.disabled) return;
+        setButtonLoading(button, true, 'Iniciando...');
+        try {
+            const result = await api('login', { identifier: inputs[0].value.trim(), password: inputs[1].value, deviceId });
+            document.activeElement?.blur();
+            update(result.user);
+            inputs.forEach(input => input.value = '');
+            showToast('Bienvenido, ' + result.user.username);
+        } catch (error) { showToast(error.message); }
+        finally { setButtonLoading(button, false); }
+    }
+    button.addEventListener('click', login);
+    inputs.forEach(input => input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); login(); }
+    }));
+    async function logout() {
+        try { await api('logout'); update(null); }
+        catch (error) { showToast('No se pudo cerrar la sesión: ' + error.message); }
+    }
+    document.getElementById('adminSignOut')?.addEventListener('click', logout);
+    window.addEventListener('roblox:requestSignOut', logout);
+    let avatar = '1.webp';
+    document.querySelectorAll('#iconPicker .icon-option').forEach(option => option.addEventListener('click', () => {
+        document.querySelectorAll('#iconPicker .icon-option').forEach(el => el.classList.toggle('selected', el === option));
+        avatar = option.dataset.icon;
+    }));
+    document.getElementById('adminNewPassword').type = 'password';
+    document.getElementById('adminNewPassword').minLength = 12;
+    document.getElementById('adminCreateForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const btn = document.getElementById('adminCreateBtn');
+        if (btn.disabled) return;
+        setButtonLoading(btn, true, 'Creando...');
+        const msg = document.getElementById('adminCreateMsg');
+        try {
+            await api('create', {
+                username: document.getElementById('adminNewUsername').value.trim(),
+                password: document.getElementById('adminNewPassword').value,
+                daysValid: Number(document.getElementById('adminNewDuration').value), avatar
+            });
+            msg.textContent = 'Cuenta creada.';
+            msg.className = 'admin-form-msg success';
+            event.target.reset();
+            await renderUsers();
+        } catch (error) { msg.textContent = error.message; msg.className = 'admin-form-msg error'; }
+        finally { msg.hidden = false; setButtonLoading(btn, false); }
     });
-
-    // Cuando la pestaña recupera foco o se vuelve visible, verificar
-    // que la sesión sigue siendo válida (no fue revocada por el admin).
-    async function validateSessionOnFocus() {
-        const sess = getSession();
-        if (!sess || !isSessionValid(sess)) return;
-        // Verificar heartbeat inmediatamente
-        if (sess.sessionId) {
-            await heartbeatSession(sess.username, sess.sessionId);
-        }
-    }
-    document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") {
-            validateSessionOnFocus();
-        }
-    });
-    window.addEventListener("focus", validateSessionOnFocus);
-
-    // ============== User CRUD (Firebase Realtime Database) ==============
-    // Estructura RTDB:
-    //   users/
-    //     {username}/
-    //       username: string
-    //       passwordHash: string
-    //       role: "admin" | "user"
-    //       createdAt: number (Unix ms)
-    //       expiresAt: number (Unix ms)
-
-    function tsToMs(ts) {
-        if (ts == null) return null;
-        if (typeof ts === "number") return ts;
-        return ts;
-    }
-
-    function randomCardLast4() {
-        return String(Math.floor(1000 + Math.random() * 9000));
-    }
-
-    function stableCardLast4(seed) {
-        const text = String(seed || "roblox-user");
-        let hash = 0;
-        for (let i = 0; i < text.length; i += 1) {
-            hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-        }
-        return String(1000 + (Math.abs(hash) % 9000));
-    }
-
-    // RTDB no permite los caracteres  . # $ [ ]  en las keys de los paths.
-    // Sanitizamos el username para usarlo como key, pero conservamos el
-    // username ORIGINAL en el documento (es lo que ve el admin y lo que
-    // usa el login para resolver el hash de la contraseña).
-    function sanitizeKey(name) {
-        return String(name || "").replace(/[.#$\[\]@/]/g, "_");
-    }
-
-    async function findUser(username) {
+    async function renderUsers() {
+        const list = document.getElementById('adminUsersList');
+        list.textContent = 'Cargando...';
         try {
-            const key = sanitizeKey(username);
-            const snap = await rtdb.ref("users/" + key).once("value");
-            return snap.exists() ? { id: snap.key, ...snap.val() } : null;
-        } catch (e) {
-            console.error("findUser error:", e);
-            return null;
-        }
-    }
-    async function createUser({ username, password, role, daysValid, avatar }) {
-        const passwordHash = await hashPassword(password);
-        const now = Date.now();
-        const expiresAt = now + daysValid * 24 * 60 * 60 * 1000;
-        const user = {
-            username,
-            passwordHash,
-            role: role || "user",
-            avatar: avatar || "1.webp",
-            cardLast4: randomCardLast4(),
-            createdAt: now,
-            expiresAt: expiresAt,
-        };
-        await rtdb.ref("users/" + sanitizeKey(username)).set(user);
-        return user;
-    }
-    async function listUsers() {
-        try {
-            const snap = await rtdb.ref("users").orderByChild("createdAt").once("value");
-            const list = [];
-            snap.forEach((child) => {
-                list.push({ id: child.key, ...child.val() });
-            });
-            // Ordenar de más nuevo a más viejo
-            list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-            return list;
-        } catch (e) {
-            console.error("listUsers error:", e);
-            return [];
-        }
-    }
-    async function deleteUser(username) {
-        const key = sanitizeKey(username);
-        await rtdb.ref("users/" + key).remove();
-        try {
-            await rtdb.ref("sessions/" + sessionKey(username)).remove();
-        } catch (_) {}
-    }
-    async function resetUserDevice(username) {
-        const key = sanitizeKey(username);
-        // 1. Eliminar la vinculación del dispositivo en RTDB
-        await rtdb.ref("users/" + key + "/deviceId").remove();
-        // 2. Eliminar todas las sesiones activas asociadas a la cuenta para cerrar sesión en el dispositivo previo
-        try {
-            await rtdb.ref("sessions/" + sessionKey(username)).remove();
-        } catch (_) {}
-    }
-
-    // ============== Auth UI updates ==============
-    function updateAuthUI() {
-        const session = getSession();
-        const valid = isSessionValid(session);
-        const loginTrigger = document.getElementById("openLoginModal");
-        const profileChip = document.querySelector(".age-bracket-label");
-        const adminTab = document.querySelector(".tab-admin");
-
-        if (valid && session) {
-            // Logged in
-            // Iniciar el heartbeat para mantener la sesión activa en RTDB
-            if (session.sessionId) {
-                startHeartbeat(session.username, session.sessionId);
-            }
-            if (loginTrigger) loginTrigger.hidden = true;
-            if (profileChip) {
-                profileChip.style.display = "";
-            }
-            
-            // Actualizar todos los nombres de usuario en la UI
-            const nameEls = document.querySelectorAll(".user-username-text");
-            nameEls.forEach((el) => {
-                el.textContent = session.username;
-            });
-            
-            // Actualizar todos los avatares en la UI
-            const avatarImgs = document.querySelectorAll(".user-avatar-img");
-            const showAvatar = (avatarName) => {
-                avatarImgs.forEach((img) => {
-                    img.onerror = () => {
-                        img.onerror = null;
-                        img.src = "recursos/iconos/" + DEFAULT_AVATAR;
-                        img.style.display = "";
-                    };
-                    img.src = "recursos/iconos/" + (avatarName || DEFAULT_AVATAR);
-                    img.style.display = "";
-                });
-            };
-
-            showAvatar(session.avatar);
-            if (!session.avatar || session.avatar === DEFAULT_AVATAR) {
-                findUser(session.username).then((u) => {
-                    if (u && u.avatar) {
-                        session.avatar = u.avatar;
-                        setSession(session);
-                        showAvatar(u.avatar);
-                    }
-                }).catch(() => {});
-            }
-
-            if (adminTab && session.role === "admin") {
-                adminTab.hidden = false;
-                adminTab.classList.add("visible");
-            } else if (adminTab) {
-                adminTab.hidden = true;
-                adminTab.classList.remove("visible");
-            }
-        } else {
-            // Not logged in / expired
-            clearSession();
-            if (loginTrigger) loginTrigger.hidden = false;
-            if (profileChip) {
-                profileChip.style.display = "none";
-            }
-            if (adminTab) {
-                adminTab.hidden = true;
-                adminTab.classList.remove("visible");
-            }
-        }
-    }
-
-    // ============== Sign in (override the demo submit) ==============
-    const submitBtn = document.getElementById("loginSubmitBtn");
-    if (submitBtn) {
-        // Replace the existing click handler from the login modal IIFE
-        // by adding a new one (we'll detect and override below)
-        const newSubmit = async () => {
-            const inputs = document.querySelectorAll("#loginModal .login-input");
-            const identifier = (inputs[0]?.value || "").trim();
-            const password = inputs[1]?.value || "";
-            if (!identifier || !password) {
-                showToast("Ingresa usuario/correo y contraseña");
-                return;
-            }
-            setButtonLoading(submitBtn, true, "Iniciando...");
-            const closeAndWelcome = (user) => {
-                const overlay = document.getElementById("loginModal");
-                if (overlay) {
-                    // Mover el foco fuera del modal ANTES de ocultarlo
-                    // para evitar el warning de aria-hidden + focus retenido
-                    if (document.activeElement && overlay.contains(document.activeElement)) {
-                        document.activeElement.blur();
-                    }
-                    overlay.classList.remove("open");
-                    overlay.setAttribute("aria-hidden", "true");
-                    document.body.style.overflow = "";
-                    inputs.forEach((i) => (i.value = ""));
-                }
-                const name = user.displayName || user.username || "admin";
-                showToast(`Bienvenido, ${name}`);
-            };
-
-            // Helper: verificar límite de sesiones activas y vinculación de dispositivo
-            // Si el usuario ya tiene SESSIONS_MAX sesiones o está vinculado a otro dispositivo, se rechaza el login
-            // Si el rol es admin, se permite multidispositivo sin límite de sesiones ni vinculación.
-            const enforceSessionLimit = async (username, incomingSessionId, role) => {
-                if (role === "admin") {
-                    return { ok: true, sessionId: incomingSessionId };
-                }
-                
-                // --- Device Binding Check ---
-                let deviceId = localStorage.getItem("amenzaa_device_id");
-                if (!deviceId) {
-                    deviceId = "dev_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
-                    localStorage.setItem("amenzaa_device_id", deviceId);
-                }
-                
-                try {
-                    const safeKey = sanitizeKey(username);
-                    const snap = await rtdb.ref("users/" + safeKey + "/deviceId").once("value");
-                    if (snap.exists()) {
-                        const boundDeviceId = snap.val();
-                        if (boundDeviceId !== deviceId) {
-                            return { ok: false, deviceBound: true };
-                        }
-                    } else {
-                        // Vincular este dispositivo a la cuenta
-                        await rtdb.ref("users/" + safeKey + "/deviceId").set(deviceId);
-                    }
-                } catch (e) {
-                    console.error("[auth] device-bind check FAILED:", e.message);
-                    // Si falla la lectura por reglas o red, bloqueamos por seguridad
-                    return { ok: false, deviceBound: true };
-                }
-
-                try {
-                    await cleanStaleSessions(username);
-                    const list = await getActiveSessionList(username);
-                    console.log("[auth] session-limit check for", username, "→ active sessions:", list.length, list.map(s => s.id.slice(0,8)));
-                    const alreadyRegistered = list.some((s) => s.id === incomingSessionId);
-                    if (alreadyRegistered) return { ok: true, sessionId: incomingSessionId };
-                    if (list.length >= SESSIONS_MAX) {
-                        return {
-                            ok: false,
-                            activeSessions: list.length,
-                            otherSessionIds: list.map((s) => s.id),
-                            deviceBound: false
-                        };
-                    }
-                    return { ok: true, sessionId: incomingSessionId };
-                } catch (e) {
-                    console.error("[auth] session-limit check FAILED (¿reglas de RTDB sin acceso a /sessions?):", e.message);
-                    // Si falla (permisos, red), dejamos pasar pero logueamos
-                    return { ok: true, sessionId: incomingSessionId };
-                }
-            };
-
-            // Helper: procesar un usuario de RTDB
-            const handleRtdbUser = async (rtdbUser) => {
-                const expiresMs = Number(rtdbUser.expiresAt) || 0;
-                if (expiresMs < Date.now()) {
-                    setButtonLoading(submitBtn, false);
-                    showLoginError(`<strong>Cuenta expirada</strong>Esta cuenta ya no está activa. Comunícate con el administrador para renovarla.`);
-                    return false;
-                }
-                const newSessionId = generateSessionId();
-                // Verificar el límite de sesiones (pasando el rol del usuario)
-                const limit = await enforceSessionLimit(rtdbUser.username, newSessionId, rtdbUser.role || "user");
-                if (!limit.ok) {
-                    setButtonLoading(submitBtn, false);
-                    const errorTitle = limit.deviceBound ? "Cuenta vinculada a otro dispositivo" : "Cuenta en uso en otro dispositivo";
-                    const errorReason = limit.deviceBound ? "ya está vinculada a un dispositivo diferente" : "ya tiene una sesión activa";
-                    showLoginError(
-                        `<strong>${errorTitle}</strong>` +
-                        `Esta cuenta (<code>@${escapeHtml(rtdbUser.username)}</code>) ${errorReason}. ` +
-                        `Solo se permite <strong>1 dispositivo por cuenta</strong>.` +
-                        `<br>Para usar esta cuenta en este dispositivo, contacta al administrador.`
-                    );
-                    return false;
-                }
-                if (!rtdbUser.cardLast4) {
-                    rtdbUser.cardLast4 = randomCardLast4();
-                    try {
-                        await rtdb.ref("users/" + sanitizeKey(rtdbUser.username) + "/cardLast4").set(rtdbUser.cardLast4);
-                    } catch (_) {}
-                }
-                setSession({
-                    username: rtdbUser.username,
-                    role: rtdbUser.role || "user",
-                    authProvider: "rtdb",
-                    avatar: rtdbUser.avatar || null,
-                    cardLast4: rtdbUser.cardLast4,
-                    sessionId: newSessionId,
-                    expiresAt: expiresMs,
-                });
-                // Registrar la sesión en RTDB
-                try { await registerSession(rtdbUser.username, newSessionId); } catch (_) {}
-                setButtonLoading(submitBtn, false);
-                updateAuthUI();
-                closeAndWelcome({ username: rtdbUser.username });
-                return true;
-            };
-
-            // Helper: procesar un usuario de Auth
-            const handleAuthUser = async (authUser) => {
-                let role = "admin";
-                let expiresMs = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 año
-                let avatar = null;
-                // Buscar metadata extra en RTDB (por si el admin limitó su propia cuenta)
-                try {
-                    const safeKey = sanitizeKey(authUser.email);
-                    const rtdbSnap = await rtdb.ref("users/" + safeKey).once("value");
-                    if (rtdbSnap.exists()) {
-                        const data = rtdbSnap.val();
-                        if (data.role) role = data.role;
-                        if (data.avatar) avatar = data.avatar;
-                        if (data.expiresAt) {
-                            const exp = Number(data.expiresAt) || 0;
-                            if (exp < Date.now()) {
-                                await auth.signOut();
-                                setButtonLoading(submitBtn, false);
-                                showLoginError(`<strong>Cuenta expirada</strong>Esta cuenta ya no está activa. Comunícate con el administrador para renovarla.`);
-                                return false;
-                            }
-                            expiresMs = exp;
-                        }
-                    }
-                } catch (_) { /* no metadata, default admin */ }
-                const newSessionId = generateSessionId();
-                // Verificar el límite de sesiones (pasando el rol del usuario)
-                const limit = await enforceSessionLimit(authUser.email, newSessionId, role);
-                if (!limit.ok) {
-                    await auth.signOut();
-                    setButtonLoading(submitBtn, false);
-                    const errorTitle = limit.deviceBound ? "Cuenta vinculada a otro dispositivo" : "Cuenta en uso en otro dispositivo";
-                    const errorReason = limit.deviceBound ? "ya está vinculada a un dispositivo diferente" : "ya tiene una sesión activa";
-                    showLoginError(
-                        `<strong>${errorTitle}</strong>` +
-                        `Esta cuenta (<code>${escapeHtml(authUser.email)}</code>) ${errorReason}. ` +
-                        `Solo se permite <strong>1 dispositivo por cuenta</strong>.` +
-                        `<br>Para usar esta cuenta en este dispositivo, contacta al administrador.`
-                    );
-                    return false;
-                }
-                setSession({
-                    username: authUser.email,
-                    role: role,
-                    authProvider: "firebase",
-                    avatar: avatar,
-                    sessionId: newSessionId,
-                    expiresAt: expiresMs,
-                });
-                // Registrar la sesión en RTDB
-                try { await registerSession(authUser.email, newSessionId); } catch (_) {}
-                setButtonLoading(submitBtn, false);
-                updateAuthUI();
-                closeAndWelcome({ username: authUser.email, displayName: "admin" });
-                return true;
-            };
-
-            try {
-                const looksLikeEmail = identifier.includes("@");
-
-                if (looksLikeEmail) {
-                    // === EMAIL → Firebase Authentication (admin) ===
-                    console.log("[auth] Trying Firebase Auth with email:", identifier);
-                    try {
-                        const cred = await auth.signInWithEmailAndPassword(identifier, password);
-                        console.log("[auth] Auth success:", cred.user.email);
-                        await handleAuthUser(cred.user);
-                        return;
-                    } catch (authErr) {
-                        console.warn("[auth] Auth signin failed:", authErr.code, authErr.message);
-                        // Si fue INVALID_LOGIN_CREDENTIALS, igual intentamos RTDB
-                        // (porque el usuario pudo haber sido creado en RTDB con ese
-                        // email-style como username)
-                    }
-                }
-
-                // === USUARIO (sin @) o fallback → RTDB ===
-                console.log("[auth] Trying RTDB with identifier:", identifier);
-                const rtdbUser = await findUser(identifier);
-                if (rtdbUser && rtdbUser.passwordHash) {
-                    const hash = await hashPassword(password);
-                    if (hash === rtdbUser.passwordHash) {
-                        const ok = handleRtdbUser(rtdbUser);
-                        if (ok) return;
-                        return;
-                    } else {
-                        setButtonLoading(submitBtn, false);
-                        showToast("Contraseña incorrecta");
-                        return;
-                    }
-                }
-
-                // Si llegamos aquí, no se encontró en ningún lado
-                setButtonLoading(submitBtn, false);
-                if (looksLikeEmail) {
-                    showToast("No existe una cuenta con ese correo");
-                } else {
-                    showToast("Usuario no encontrado");
-                }
-            } catch (e) {
-                console.error("[auth] Login error:", e);
-                setButtonLoading(submitBtn, false);
-                showToast("Error al iniciar sesión: " + (e.message || e));
-            }
-        };
-        // Clone to remove any previous listener (the demo one from LOGIN MODAL IIFE)
-        const newBtn = submitBtn.cloneNode(true);
-        submitBtn.parentNode.replaceChild(newBtn, submitBtn);
-        newBtn.addEventListener("click", newSubmit);
-
-        // También capturar Enter en los inputs del modal
-        const loginInputs = document.querySelectorAll("#loginModal .login-input");
-        loginInputs.forEach((inp) => {
-            inp.addEventListener("keydown", (e) => {
-                if (e.key === "Enter") {
-                    e.preventDefault();
-                    newBtn.click();
-                }
-            });
-        });
-    }
-
-    // ============== Sign out ==============
-    function signOut() {
-        stopHeartbeat();
-        clearSession();
-        updateAuthUI();
-        // Navigate to Destacadas
-        const tab = document.querySelector('.tab[data-tab="destacadas"]');
-        if (tab) tab.click();
-        // Show login modal automatically
-        const loginOverlay = document.getElementById("loginModal");
-        if (loginOverlay && !loginOverlay.classList.contains("open")) {
-            loginOverlay.classList.add("open");
-            loginOverlay.setAttribute("aria-hidden", "false");
-            document.body.style.overflow = "hidden";
-        }
-        showToast("Sesión cerrada");
-    }
-    const signOutBtn = document.getElementById("adminSignOut");
-    if (signOutBtn) signOutBtn.addEventListener("click", signOut);
-
-    // Listen for signout requests from other parts of the app (e.g. settings dropdown)
-    window.addEventListener("roblox:requestSignOut", signOut);
-
-    // El profile-chip es solo visual — al hacer click no debe pasar nada.
-    // El usuario cierra sesión desde el botón "Cerrar sesión" del panel admin
-    // o desde el menú de ajustes (settings dropdown).
-    const profileChip = document.querySelector(".profile-chip");
-    if (profileChip) {
-        profileChip.style.cursor = "default";
-    }
-
-    // ============== Admin: create user ==============
-    const createForm = document.getElementById("adminCreateForm");
-    let selectedIcon = "1.webp";
-    if (createForm) {
-        // Wire icon picker
-        const iconPicker = document.getElementById("iconPicker");
-        if (iconPicker) {
-            iconPicker.querySelectorAll(".icon-option").forEach((opt) => {
-                opt.addEventListener("click", () => {
-                    iconPicker.querySelectorAll(".icon-option").forEach((o) => o.classList.remove("selected"));
-                    opt.classList.add("selected");
-                    selectedIcon = opt.dataset.icon;
-                });
-            });
-        }
-
-        createForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const username = document.getElementById("adminNewUsername").value.trim();
-            const password = document.getElementById("adminNewPassword").value;
-            // Forzar rol de usuario (los admins solo se crean desde Firebase Auth)
-            const role = "user";
-            const days = parseInt(document.getElementById("adminNewDuration").value, 10) || 30;
-            const msg = document.getElementById("adminCreateMsg");
-            const btn = document.getElementById("adminCreateBtn");
-
-            if (!username || !password) {
-                showMsg(msg, "Ingresa usuario y contraseña", "error");
-                return;
-            }
-            if (username.length < 3) {
-                showMsg(msg, "El usuario debe tener al menos 3 caracteres", "error");
-                return;
-            }
-            // Solo letras, números, guion bajo, guion y punto.
-            // (El . se sanitiza a _ automáticamente al guardar en RTDB)
-            if (!/^[A-Za-z0-9_.\-]{3,32}$/.test(username)) {
-                showMsg(msg, "Usuario inválido. Solo letras, números, guion bajo, guion y punto (3-32 caracteres).", "error");
-                return;
-            }
-            if (password.length < 4) {
-                showMsg(msg, "La contraseña debe tener al menos 4 caracteres", "error");
-                return;
-            }
-            if (days < 1 || days > 365) {
-                showMsg(msg, "La duración debe estar entre 1 y 365 días", "error");
-                return;
-            }
-
-            setButtonLoading(btn, true, "Creando...");
-            try {
-                // Timeout de 8s para detectar problemas de RTDB
-                const existing = await Promise.race([
-                    findUser(username),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout-conexion")), 8000)),
-                ]);
-                if (existing) {
-                    setButtonLoading(btn, false);
-                    showMsg(msg, `El usuario "${username}" ya existe`, "error");
-                    return;
-                }
-                await Promise.race([
-                    createUser({ username, password, role, daysValid: days, avatar: selectedIcon }),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout-conexion")), 8000)),
-                ]);
-                setButtonLoading(btn, false);
-                showMsg(msg, `✓ Cuenta "${username}" creada. Válida por ${days} días. Credenciales: ${username} / ${password}`, "success");
-                createForm.reset();
-                document.getElementById("adminNewDuration").value = 30;
-                // Reset icon picker al primero
-                const iconPickerEl = document.getElementById("iconPicker");
-                if (iconPickerEl) {
-                    iconPickerEl.querySelectorAll(".icon-option").forEach((o, i) => {
-                        o.classList.toggle("selected", i === 0);
+            const { users } = await api('list');
+            list.replaceChildren();
+            if (!users.length) list.textContent = 'No hay usuarios registrados.';
+            for (const user of users) {
+                const row = document.createElement('div'); row.className = 'admin-user-row';
+                const image = document.createElement('img'); image.src = 'recursos/iconos/' + user.avatar; image.width = 40; image.alt = '';
+                const info = document.createElement('div'); info.className = 'admin-user-info';
+                const days = Math.max(0, Math.ceil((user.expiresAt - Date.now()) / 86400000));
+                info.textContent = `@${user.username} · ${days} días restantes · ${user.deviceId ? 'Dispositivo vinculado' : 'Sin vincular'}`;
+                row.append(image, info);
+                for (const [action, label] of [['resetDevice', 'Limpiar dispositivo'], ['delete', 'Eliminar']]) {
+                    const control = document.createElement('button'); control.type = 'button'; control.textContent = label;
+                    control.className = action === 'delete' ? 'admin-delete-btn' : 'admin-reset-device-btn';
+                    control.addEventListener('click', async () => {
+                        if (!confirm(`${label}: @${user.username}?`)) return;
+                        control.disabled = true;
+                        try { await api(action, { uid: user.id }); await renderUsers(); }
+                        catch (error) { showToast(error.message); control.disabled = false; }
                     });
-                    selectedIcon = "1.webp";
+                    row.append(control);
                 }
-                await renderAdminUsers();
-            } catch (e) {
-                console.error(e);
-                setButtonLoading(btn, false);
-                if (e.message === "timeout-conexion") {
-                    showMsg(msg, "No se puede conectar a la base de datos. Crea la Realtime Database en Firebase Console primero.", "error");
-                } else {
-                    showMsg(msg, "Error al crear la cuenta: " + (e.message || e), "error");
-                }
+                list.append(row);
             }
-        });
+        } catch (error) { list.textContent = error.message; }
     }
-
-    function showMsg(el, text, type) {
-        if (!el) return;
-        el.textContent = text;
-        el.className = "admin-form-msg " + type;
-        el.hidden = false;
-    }
-
-    // ============== Admin: list users ==============
-    async function renderAdminUsers() {
-        const list = document.getElementById("adminUsersList");
-        if (!list) return;
-        list.innerHTML = '<p class="admin-empty">Cargando usuarios…</p>';
-        let users;
-        try {
-            // Intentar leer la lista directamente con timeout
-            // (no usamos .info/connected porque puede dar falsos negativos
-            // si las reglas no permiten ese path específico)
-            users = await Promise.race([
-                listUsers(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("timeout-leyendo-usuarios")), 8000)),
-            ]);
-        } catch (e) {
-            console.error("RTDB list error:", e);
-            const isTimeout = e.message === "timeout-leyendo-usuarios";
-            const detail = isTimeout
-                ? "La lectura tardó demasiado. Revisa las reglas de Firebase RTDB — deben permitir read en /users."
-                : (e.message || String(e));
-            list.innerHTML = `
-                <div class="admin-error">
-                    <strong>⚠️ No se pudo leer la lista de usuarios.</strong>
-                    <p>Verifica las reglas de seguridad de Realtime Database en Firebase Console. Para que el sistema completo funcione (incluyendo límite de sesiones), las reglas deben permitir lectura y escritura en <code>users</code> y <code>sessions</code>:</p>
-                    <pre style="background:#fff8e8;padding:8px;border-radius:4px;font-size:11px;margin:6px 0;overflow:auto;">{
-  "rules": {
-    "users":    { ".read": true, ".write": true },
-    "sessions": { ".read": true, ".write": true }
-  }
-}</pre>
-                    <p class="admin-error-detail">Detalle: ${escapeHtml(detail)}</p>
-                </div>
-            `;
-            return;
-        }
-        if (users.length === 0) {
-            list.innerHTML = '<p class="admin-empty">No hay usuarios registrados todavía. Crea uno arriba.</p>';
-            return;
-        }
-        list.innerHTML = "";
-        const now = Date.now();
-        users.forEach((u) => {
-            const expiresMs = u.expiresAt?.toMillis ? u.expiresAt.toMillis() : new Date(u.expiresAt).getTime();
-            const isExpired = expiresMs < now;
-            const daysLeft = Math.max(0, Math.ceil((expiresMs - now) / (24 * 60 * 60 * 1000)));
-            const createdMs = u.createdAt?.toMillis ? u.createdAt.toMillis() : new Date(u.createdAt).getTime();
-            const createdDate = new Date(createdMs);
-            const avatarFile = u.avatar || "1.webp";
-            const initial = (u.username || "?").charAt(0).toUpperCase();
-
-            const hasDevice = Boolean(u.deviceId);
-
-            const row = document.createElement("div");
-            row.className = "admin-user-row";
-            row.innerHTML = `
-                <div class="admin-user-avatar">
-                    <img src="recursos/iconos/${escapeHtml(avatarFile)}" alt="" onerror="this.remove();this.parentNode.innerHTML='<span class=&quot;admin-user-avatar-fallback&quot;>${escapeHtml(initial)}</span>'" />
-                </div>
-                <div class="admin-user-info">
-                    <div class="admin-user-name">@${escapeHtml(u.username)}</div>
-                    <div class="admin-user-meta">
-                        <span class="admin-role-badge ${u.role === "admin" ? "admin" : "user"}">${escapeHtml(u.role || "user")}</span>
-                        <span class="admin-status-badge ${isExpired ? "expired" : "active"}">${isExpired ? "Expirado" : `${daysLeft} día${daysLeft === 1 ? "" : "s"} restantes`}</span>
-                        <span class="admin-device-badge ${hasDevice ? "bound" : "unbound"}">${hasDevice ? "📱 Dispositivo vinculado" : "📱 Sin vincular"}</span>
-                        <span>Creado: ${createdDate.toLocaleDateString("es-CO")}</span>
-                    </div>
-                </div>
-                <div class="admin-user-actions">
-                    <button class="admin-reset-device-btn" type="button" data-username="${escapeHtml(u.username)}" title="Desvincular dispositivo actual para permitir que la cuenta inicie en un nuevo teléfono o PC">
-                        🔄 Limpiar dispositivo
-                    </button>
-                    <button class="admin-delete-btn" type="button" data-username="${escapeHtml(u.username)}">Eliminar</button>
-                </div>
-            `;
-            list.appendChild(row);
-        });
-
-        // Event listeners para Limpiar Dispositivo
-        list.querySelectorAll(".admin-reset-device-btn").forEach((b) => {
-            b.addEventListener("click", async () => {
-                const username = b.dataset.username;
-                if (!confirm(`¿Deseas limpiar y desvincular el dispositivo de la cuenta "@${username}"?\n\nAl hacerlo, el usuario podrá volver a iniciar sesión desde un nuevo teléfono o navegador.`)) return;
-                try {
-                    b.disabled = true;
-                    b.textContent = "Limpiando…";
-                    await resetUserDevice(username);
-                    showToast(`Dispositivo liberado para @${username}`);
-                    await renderAdminUsers();
-                } catch (e) {
-                    console.error("Error al limpiar dispositivo:", e);
-                    showToast("Error al limpiar dispositivo");
-                    b.disabled = false;
-                    b.textContent = "🔄 Limpiar dispositivo";
-                }
-            });
-        });
-
-        // Event listeners para Eliminar Cuenta
-        list.querySelectorAll(".admin-delete-btn").forEach((b) => {
-            b.addEventListener("click", async () => {
-                const username = b.dataset.username;
-                if (!confirm(`¿Eliminar la cuenta "${username}"?`)) return;
-                try {
-                    await deleteUser(username);
-                    showToast(`Cuenta "${username}" eliminada`);
-                    await renderAdminUsers();
-                } catch (e) {
-                    console.error(e);
-                    showToast("Error al eliminar");
-                }
-            });
-        });
-    }
-
-    function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-    }
-
-    const refreshBtn = document.getElementById("adminRefreshBtn");
-    if (refreshBtn) refreshBtn.addEventListener("click", renderAdminUsers);
-
-    // When the admin tab is activated, refresh the user list
-    const adminTab = document.querySelector('.tab[data-tab="admin"]');
-    if (adminTab) {
-        adminTab.addEventListener("click", () => {
-            setTimeout(renderAdminUsers, 50);
-        });
-    }
-
-    // Initial auth state on page load
-    updateAuthUI();
-    // If no valid session, automatically show the login modal
-    if (!isSessionValid(getSession())) {
-        const loginOverlay = document.getElementById("loginModal");
-        if (loginOverlay) {
-            loginOverlay.classList.add("open");
-            loginOverlay.setAttribute("aria-hidden", "false");
-            document.body.style.overflow = "hidden";
-        }
-    }
+    document.getElementById('adminRefreshBtn')?.addEventListener('click', renderUsers);
+    document.querySelector('.tab[data-tab="admin"]')?.addEventListener('click', renderUsers);
+    update(null);
+    api('me').then(result => update(result.user)).catch(() => update(null));
+    setInterval(() => {
+        if (currentUser) api('me').then(result => update(result.user)).catch(() => update(null));
+    }, 60000);
 })();
+
 
 // ============== SETTINGS DROPDOWN (navbar gear) ==============
 (function () {
