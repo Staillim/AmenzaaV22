@@ -13,7 +13,7 @@ test('HTTP server exposes public assets but never internal files', async () => {
       catch { await new Promise(resolve => setTimeout(resolve, 100)); }
     }
     assert.equal(connected, true);
-    for (const path of ['/.env', '/.env.example', '/server.cjs', '/server/account.cjs', '/package.json', '/.git/config', '/README.md', '/netlify/functions/account.mts', '/%2e%2e%5cserver.cjs']) {
+    for (const path of ['/.env', '/.env.example', '/server.cjs', '/server/account.mjs', '/package.json', '/.git/config', '/README.md', '/netlify/functions/account.mts', '/%2e%2e%5cserver.cjs']) {
       assert.equal((await fetch('http://127.0.0.1:5199' + path)).status, 404, path);
     }
     const page = await fetch('http://127.0.0.1:5199/');

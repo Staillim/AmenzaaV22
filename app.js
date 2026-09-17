@@ -1426,6 +1426,11 @@ function showSendSuccessToast(amount) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...data, action }), signal: AbortSignal.timeout(20000)
         });
+        if (!result.headers.get('content-type')?.includes('application/json')) {
+            throw new Error(result.status >= 500
+                ? `El servidor no pudo iniciar (HTTP ${result.status}). Revisa el registro de la función account en Netlify.`
+                : 'Netlify no devolvió una respuesta de la aplicación. Revisa el acceso al sitio.');
+        }
         const body = await result.json();
         if (!result.ok) {
             if (result.status === 401) update(null);

@@ -1,7 +1,7 @@
-const { createHash, randomUUID } = require('node:crypto');
-const { initializeApp, cert, getApps } = require('firebase-admin/app');
-const { getAuth } = require('firebase-admin/auth');
-const { getDatabase } = require('firebase-admin/database');
+import { createHash, randomUUID } from 'node:crypto';
+import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getDatabase } from 'firebase-admin/database';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const avatars = new Set(['1.webp','2.webp','3.webp','5.webp','6.webp','7.webp','8.webp','9.webp','11.webp','22.webp']);
@@ -140,4 +140,5 @@ async function handle(request, context = {}) {
     return response({ error: error.status ? error.message : 'No se pudo completar la operación.' }, error.status || 503);
   }
 }
-module.exports = { handle, configuration, publicUser };
+export { handle, configuration, publicUser };
+export default { handle };

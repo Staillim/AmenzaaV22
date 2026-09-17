@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { handle } = require('../server/account.cjs');
+const { handle } = require('../server/account.mjs');
 const cfg = {
   FIREBASE_PROJECT_ID: 'new-project', FIREBASE_DATABASE_URL: 'https://new-project.firebaseio.com',
   FIREBASE_CLIENT_EMAIL: 'service@example.com', FIREBASE_PRIVATE_KEY: 'test', FIREBASE_WEB_API_KEY: 'test',

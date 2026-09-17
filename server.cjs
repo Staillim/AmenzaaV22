@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "dist");
-const { handle } = require("./server/account.cjs");
+const { handle } = require("./server/account.mjs");
 require("./scripts/build.cjs");
 const PORT = process.env.PORT || 5173;
 

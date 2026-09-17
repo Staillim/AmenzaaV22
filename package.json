@@ -16,5 +16,8 @@
     "gaxios": {
       "uuid": "11.1.1"
     }
+  },
+  "devDependencies": {
+    "@netlify/zip-it-and-ship-it": "^16.0.0"
   }
 }
