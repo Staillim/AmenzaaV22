@@ -16,8 +16,9 @@ function configuration(env) {
   return cfg;
 }
 function services(cfg) {
+  const cleanKey = (cfg.FIREBASE_PRIVATE_KEY || '').trim().replace(/^["']|["']$/g, '').replace(/\\n/g, '\n');
   const app = getApps()[0] || initializeApp({
-    credential: cert({ projectId: cfg.FIREBASE_PROJECT_ID, clientEmail: cfg.FIREBASE_CLIENT_EMAIL, privateKey: cfg.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') }),
+    credential: cert({ projectId: cfg.FIREBASE_PROJECT_ID, clientEmail: cfg.FIREBASE_CLIENT_EMAIL, privateKey: cleanKey }),
     databaseURL: cfg.FIREBASE_DATABASE_URL
   });
   return { auth: getAuth(app), db: getDatabase(app) };
@@ -136,7 +137,7 @@ async function handle(request, context = {}) {
     }
     fail(400, 'Operación no válida.');
   } catch (error) {
-    if (!error.status) console.error('Account request failed', { code: error.code || 'internal', requestId: randomUUID() });
+    if (!error.status) console.error('Account request failed:', error);
     return response({ error: error.status ? error.message : 'No se pudo completar la operación.' }, error.status || 503);
   }
 }
