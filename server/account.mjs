@@ -75,12 +75,15 @@ async function handle(request, context = {}) {
       if (!admin) {
         if (typeof body.deviceId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.deviceId)) fail(400, 'Dispositivo inválido.');
         const device = hash(body.deviceId);
-        const bind = await ref.transaction(value => {
-          if (!value || value.disabled || (!Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now()) || (value.deviceId && value.deviceId !== device)) return;
-          return { ...value, deviceId: device, sessionIssuedAt: identity.iat };
-        });
-        if (!bind.committed) fail(403, 'Cuenta no disponible en este dispositivo.');
-        profile = bind.snapshot.val();
+        if (profile.deviceId && profile.deviceId !== device) {
+          fail(403, 'Cuenta no disponible en este dispositivo.');
+        }
+        if (!profile.deviceId) {
+          await ref.update({ deviceId: device, sessionIssuedAt: identity.iat });
+          profile.deviceId = device;
+        } else {
+          await ref.update({ sessionIssuedAt: identity.iat });
+        }
       }
       const cookie = await auth.createSessionCookie(tokens.idToken, { expiresIn: sessionSeconds * 1000 });
       if (!admin) await ref.update({ sessionHash: hash(cookie) });
