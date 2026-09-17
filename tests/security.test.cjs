@@ -72,6 +72,7 @@ test('limits request size', async () => {
   assert.equal((await handle(req({ x: 'x'.repeat(9000) }), ctx())).status, 413);
 });
 test('public build contains no server, env, SDK configuration or old project', () => {
+  require('../scripts/build.cjs');
   for (const name of ['.env', '.env.example', 'server.cjs', 'server', 'netlify', 'package.json', '.git', 'README.md']) assert.equal(fs.existsSync('dist/' + name), false);
   for (const name of ['index.html', 'app.js']) {
     const text = fs.readFileSync('dist/' + name, 'utf8');

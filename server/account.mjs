@@ -10,8 +10,11 @@ function configuration(env) {
   const keys = ['FIREBASE_PROJECT_ID','FIREBASE_DATABASE_URL','FIREBASE_CLIENT_EMAIL','FIREBASE_PRIVATE_KEY','FIREBASE_WEB_API_KEY','ADMIN_UIDS','APP_ORIGIN'];
   const cfg = Object.fromEntries(keys.map(k => [k, env(k)]));
   if (keys.some(k => !cfg[k])) fail(503, 'El servidor todavía no está configurado.');
-  const origin = new URL(cfg.APP_ORIGIN);
-  if (origin.origin !== cfg.APP_ORIGIN || (origin.protocol !== 'https:' && origin.hostname !== 'localhost')) fail(503, 'Configuración de origen inválida.');
+  const rawOrigin = String(cfg.APP_ORIGIN || '').trim().replace(/^["']|["']$/g, '');
+  let origin;
+  try { origin = new URL(rawOrigin); } catch { fail(503, 'Configuración de origen inválida.'); }
+  if (origin.protocol !== 'https:' && origin.hostname !== 'localhost') fail(503, 'Configuración de origen inválida. Debe usar https://');
+  cfg.APP_ORIGIN = origin.origin;
   if (cfg.FIREBASE_PROJECT_ID === 'clone-15faa') fail(503, 'Configura el proyecto nuevo, no el comprometido.');
   return cfg;
 }
