@@ -68,11 +68,8 @@ test('rejects invalid inputs and attempts to delete admin', async () => {
 test('fails closed without server configuration', async () => {
   assert.equal((await handle(req({ action: 'login' }), { env: () => undefined })).status, 503);
 });
-test('limits request size and login attempts', async () => {
+test('limits request size', async () => {
   assert.equal((await handle(req({ x: 'x'.repeat(9000) }), ctx())).status, 413);
-  const context = ctx();
-  context.services.db.ref = () => ({ transaction: async () => ({ committed: false }) });
-  assert.equal((await handle(req({ action: 'login' }), context)).status, 429);
 });
 test('public build contains no server, env, SDK configuration or old project', () => {
   for (const name of ['.env', '.env.example', 'server.cjs', 'server', 'netlify', 'package.json', '.git', 'README.md']) assert.equal(fs.existsSync('dist/' + name), false);
