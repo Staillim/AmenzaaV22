@@ -73,13 +73,12 @@ async function handle(request, context = {}) {
       let profile = (await ref.get()).val();
       if (!admin && (!profile || (!Number.isFinite(profile.expiresAt) || profile.expiresAt <= Date.now()) || profile.disabled)) fail(403, 'Cuenta no disponible o expirada.');
       if (!admin) {
-        if (typeof body.deviceId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.deviceId)) fail(400, 'Dispositivo inválido.');
-        const device = hash(body.deviceId);
+        const device = typeof body.deviceId === 'string' && /^[a-f0-9-]{36}$/.test(body.deviceId) ? hash(body.deviceId) : null;
         const bind = await ref.transaction(value => {
-          if (!value || value.disabled || (!Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now()) || (value.deviceId && value.deviceId !== device)) return;
-          return { ...value, deviceId: device, sessionIssuedAt: identity.iat };
+          if (!value || value.disabled || (!Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now())) return;
+          return { ...value, deviceId: device || value.deviceId || null, sessionIssuedAt: identity.iat };
         });
-        if (!bind.committed) fail(403, 'Cuenta no disponible en este dispositivo.');
+        if (!bind.committed) fail(403, 'Cuenta no disponible o expirada.');
         profile = bind.snapshot.val();
       }
       const cookie = await auth.createSessionCookie(tokens.idToken, { expiresIn: sessionSeconds * 1000 });
