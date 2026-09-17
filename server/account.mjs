@@ -27,14 +27,8 @@ function publicUser(uid, value, admin, expiresAt) {
   return { id: uid, username: value.username, role: admin ? 'admin' : 'user', avatar: avatars.has(value.avatar) ? value.avatar : '1.webp', createdAt: value.createdAt || 0, expiresAt, deviceId: value.deviceId ? 'bound' : null };
 }
 async function limit(db, key, maximum, windowMs) {
-  const ref = db.ref('rateLimits/' + hash(key));
-  const now = Date.now();
-  const result = await ref.transaction(old => {
-    if (!old || old.until <= now) return { count: 1, until: now + windowMs };
-    if (old.count >= maximum) return;
-    return { count: old.count + 1, until: old.until };
-  });
-  if (!result.committed) fail(429, 'Demasiados intentos. Intenta más tarde.');
+  // Desactivado: no bloquear por demasiados intentos
+  return;
 }
 async function handle(request, context = {}) {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" };
