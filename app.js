@@ -1480,13 +1480,72 @@ function showSendSuccessToast(amount) {
     }
     document.getElementById('adminSignOut')?.addEventListener('click', logout);
     window.addEventListener('roblox:requestSignOut', logout);
-    let avatar = '1.webp';
-    document.querySelectorAll('#iconPicker .icon-option').forEach(option => option.addEventListener('click', () => {
-        document.querySelectorAll('#iconPicker .icon-option').forEach(el => el.classList.toggle('selected', el === option));
-        avatar = option.dataset.icon;
-    }));
-    document.getElementById('adminNewPassword').type = 'password';
-    document.getElementById('adminNewPassword').minLength = 12;
+    async function copyAccountAccess(text) {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.append(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        return copied;
+    }
+    function formatAccountDate(value) {
+        const date = new Date(value || 0);
+        if (!Number.isFinite(date.getTime()) || date.getTime() <= 0) return 'Sin fecha';
+        return date.toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: '2-digit' });
+    }
+    function createAccessItem(icon, label, value) {
+        const item = document.createElement('div');
+        item.className = 'account-created-item';
+        const badge = document.createElement('span');
+        badge.className = 'account-created-item-icon';
+        badge.textContent = icon;
+        const content = document.createElement('span');
+        content.className = 'account-created-item-content';
+        const title = document.createElement('span');
+        title.className = 'account-created-item-label';
+        title.textContent = label;
+        const detail = document.createElement('strong');
+        detail.className = 'account-created-item-value';
+        detail.textContent = value;
+        content.append(title, detail);
+        item.append(badge, content);
+        return item;
+    }
+    function renderCreatedAccountMessage(container, result, copied) {
+        container.replaceChildren();
+        const card = document.createElement('div');
+        card.className = 'account-created-card';
+        const head = document.createElement('div');
+        head.className = 'account-created-head';
+        const icon = document.createElement('span');
+        icon.className = 'account-created-vip-icon';
+        icon.textContent = 'VIP';
+        const titleWrap = document.createElement('span');
+        const title = document.createElement('strong');
+        title.textContent = 'Usuario VIP creado';
+        const subtitle = document.createElement('small');
+        subtitle.textContent = copied ? 'Datos copiados al portapapeles.' : 'Copia estos datos de acceso.';
+        titleWrap.append(title, subtitle);
+        head.append(icon, titleWrap);
+        const grid = document.createElement('div');
+        grid.className = 'account-created-grid';
+        grid.append(
+            createAccessItem('U', 'Usuario', result.username),
+            createAccessItem('K', 'Contraseña', result.password),
+            createAccessItem('D', 'Duración', '30 días'),
+            createAccessItem('E', 'Expira', formatAccountDate(result.expiresAt))
+        );
+        card.append(head, grid);
+        container.append(card);
+    }
     document.getElementById('adminCreateForm').addEventListener('submit', async event => {
         event.preventDefault();
         const btn = document.getElementById('adminCreateBtn');
@@ -1494,16 +1553,14 @@ function showSendSuccessToast(amount) {
         setButtonLoading(btn, true, 'Creando...');
         const msg = document.getElementById('adminCreateMsg');
         try {
-            await api('create', {
-                username: document.getElementById('adminNewUsername').value.trim(),
-                password: document.getElementById('adminNewPassword').value,
-                daysValid: Number(document.getElementById('adminNewDuration').value), avatar
-            });
-            msg.textContent = 'Cuenta creada.';
+            const result = await api('create', { username: document.getElementById('adminNewUsername').value.trim() });
+            const accessText = `Usuario: ${result.username}\nContraseña: ${result.password}\nDuración: 30 días\nExpira: ${formatAccountDate(result.expiresAt)}`;
+            const copied = await copyAccountAccess(accessText).catch(() => false);
+            renderCreatedAccountMessage(msg, result, copied);
             msg.className = 'admin-form-msg success';
             event.target.reset();
             await renderUsers();
-        } catch (error) { msg.textContent = error.message; msg.className = 'admin-form-msg error'; }
+        } catch (error) { msg.replaceChildren(error.message); msg.className = 'admin-form-msg error'; }
         finally { msg.hidden = false; setButtonLoading(btn, false); }
     });
     async function renderUsers() {
@@ -1518,7 +1575,23 @@ function showSendSuccessToast(amount) {
                 const image = document.createElement('img'); image.src = 'recursos/iconos/' + user.avatar; image.width = 40; image.alt = '';
                 const info = document.createElement('div'); info.className = 'admin-user-info';
                 const days = Math.max(0, Math.ceil((user.expiresAt - Date.now()) / 86400000));
-                info.textContent = `@${user.username} · ${days} días restantes · ${user.deviceId ? 'Dispositivo vinculado' : 'Sin vincular'}`;
+                const name = document.createElement('div');
+                name.className = 'admin-user-name';
+                name.textContent = '@' + user.username;
+                const meta = document.createElement('div');
+                meta.className = 'admin-user-meta';
+                const status = document.createElement('span');
+                status.className = 'admin-status-badge ' + (days > 0 ? 'active' : 'expired');
+                status.textContent = days > 0 ? `${days} días restantes` : 'Expirada';
+                const created = document.createElement('span');
+                created.textContent = 'Creado: ' + formatAccountDate(user.createdAt);
+                const expires = document.createElement('span');
+                expires.textContent = 'Expira: ' + formatAccountDate(user.expiresAt);
+                const device = document.createElement('span');
+                device.className = 'admin-device-badge ' + (user.deviceId ? 'bound' : 'unbound');
+                device.textContent = user.deviceId ? 'Dispositivo vinculado' : 'Sin vincular';
+                meta.append(status, created, expires, device);
+                info.append(name, meta);
                 row.append(image, info);
                 for (const [action, label] of [['resetDevice', 'Limpiar dispositivo'], ['delete', 'Eliminar']]) {
                     const control = document.createElement('button'); control.type = 'button'; control.textContent = label;

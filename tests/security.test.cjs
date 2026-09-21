@@ -60,6 +60,34 @@ test('only allowlisted admin can read user list', async () => {
   assert.equal(result.status, 200);
   assert.equal(JSON.stringify(await result.json()).includes('secret'), false);
 });
+test('admin can create a 30 day user with just a username', async () => {
+  const writes = {};
+  let createdUser;
+  const context = ctx('owner');
+  context.services.auth.createUser = async account => {
+    createdUser = account;
+    return { uid: 'new-user' };
+  };
+  context.services.auth.deleteUser = async () => { throw Error('Unexpected delete'); };
+  context.services.db.ref = path => ({
+    get: async () => ({ val: () => null, exists: () => false }),
+    set: async value => { writes[path] = value; },
+    push: async value => { writes[path] = value; },
+    update: () => { throw Error('Unexpected update'); }
+  });
+  const before = Date.now();
+  const response = await handle(req({ action: 'create', username: 'Nuevo_User' }), context);
+  const body = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(body.username, 'Nuevo_User');
+  assert.equal(body.password.length >= 12, true);
+  assert.equal(createdUser.email.endsWith('@users.invalid'), true);
+  assert.equal(createdUser.displayName, 'Nuevo_User');
+  assert.equal(createdUser.password, body.password);
+  assert.equal(writes['users/new-user'].username, 'Nuevo_User');
+  assert.equal(writes['users/new-user'].avatar, '1.webp');
+  assert.equal(Math.round((writes['users/new-user'].expiresAt - before) / 86400000), 30);
+});
 test('rejects invalid inputs and attempts to delete admin', async () => {
   assert.equal((await handle(req({ action: 'create', username: '../admin', password: '123' }), ctx('owner'))).status, 400);
   assert.equal((await handle(req({ action: 'delete', uid: 'owner' }), ctx('owner'))).status, 400);
@@ -72,6 +100,7 @@ test('limits request size', async () => {
   assert.equal((await handle(req({ x: 'x'.repeat(9000) }), ctx())).status, 413);
 });
 test('public build contains no server, env, SDK configuration or old project', () => {
+  require('../scripts/build.cjs');
   for (const name of ['.env', '.env.example', 'server.cjs', 'server', 'netlify', 'package.json', '.git', 'README.md']) assert.equal(fs.existsSync('dist/' + name), false);
   for (const name of ['index.html', 'app.js']) {
     const text = fs.readFileSync('dist/' + name, 'utf8');

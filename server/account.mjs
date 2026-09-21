@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getDatabase } from 'firebase-admin/database';
@@ -6,12 +6,18 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const avatars = new Set(['1.webp','2.webp','3.webp','5.webp','6.webp','7.webp','8.webp','9.webp','11.webp','22.webp']);
 const sessionSeconds = 8 * 60 * 60;
+const defaultUserDays = 30;
+const defaultAvatar = '1.webp';
+const generatePassword = () => randomBytes(18).toString('base64url');
 function configuration(env) {
   const keys = ['FIREBASE_PROJECT_ID','FIREBASE_DATABASE_URL','FIREBASE_CLIENT_EMAIL','FIREBASE_PRIVATE_KEY','FIREBASE_WEB_API_KEY','ADMIN_UIDS','APP_ORIGIN'];
   const cfg = Object.fromEntries(keys.map(k => [k, env(k)]));
   if (keys.some(k => !cfg[k])) fail(503, 'El servidor todavía no está configurado.');
-  const origin = new URL(cfg.APP_ORIGIN);
-  if (origin.origin !== cfg.APP_ORIGIN || (origin.protocol !== 'https:' && origin.hostname !== 'localhost')) fail(503, 'Configuración de origen inválida.');
+  const rawOrigin = String(cfg.APP_ORIGIN || '').trim().replace(/^["']|["']$/g, '');
+  let origin;
+  try { origin = new URL(rawOrigin); } catch { fail(503, 'Configuración de origen inválida.'); }
+  if (origin.protocol !== 'https:' && origin.hostname !== 'localhost') fail(503, 'Configuración de origen inválida. Debe usar https://');
+  cfg.APP_ORIGIN = origin.origin;
   if (cfg.FIREBASE_PROJECT_ID === 'clone-15faa') fail(503, 'Configura el proyecto nuevo, no el comprometido.');
   return cfg;
 }
@@ -108,14 +114,17 @@ async function handle(request, context = {}) {
       return response({ users: Object.entries(users).map(([uid, p]) => publicUser(uid, p, admins.has(uid), p.expiresAt)) });
     }
     if (body.action === 'create') {
-      const { username, password, daysValid, avatar } = body;
-      if (typeof username !== 'string' || !/^[A-Za-z0-9_.-]{3,32}$/.test(username) || typeof password !== 'string' || password.length < 12 || password.length > 128 || !Number.isInteger(daysValid) || daysValid < 1 || daysValid > 365 || !avatars.has(avatar)) fail(400, 'Revisa usuario, contraseña (12–128 caracteres), duración y avatar.');
+      const username = typeof body.username === 'string' ? body.username.trim() : '';
+      const password = typeof body.password === 'string' && body.password ? body.password : generatePassword();
+      const daysValid = Number.isInteger(body.daysValid) ? body.daysValid : defaultUserDays;
+      const avatar = avatars.has(body.avatar) ? body.avatar : defaultAvatar;
+      if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username) || typeof password !== 'string' || password.length < 12 || password.length > 128 || daysValid < 1 || daysValid > 365) fail(400, 'Revisa el nombre de usuario.');
       const account = await auth.createUser({ email: hash(username.toLowerCase()) + '@users.invalid', password, displayName: username });
       const record = { username, avatar, createdAt: Date.now(), expiresAt: Date.now() + daysValid * 86400000 };
       try { await db.ref('users/' + account.uid).set(record); }
       catch (error) { await auth.deleteUser(account.uid); throw error; }
       await db.ref('audit').push({ actor: identity.uid, action: 'create', target: account.uid, at: Date.now() });
-      return response({ ok: true }, 201);
+      return response({ ok: true, username, password, expiresAt: record.expiresAt }, 201);
     }
     if (['delete', 'resetDevice'].includes(body.action)) {
       if (typeof body.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.uid) || admins.has(body.uid)) fail(400, 'Cuenta no válida.');
