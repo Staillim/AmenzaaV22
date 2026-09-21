@@ -2219,62 +2219,11 @@
             <!-- Form para crear usuarios -->
             <article class="admin-card">
                 <h2 class="admin-card-title">Crear cuenta</h2>
-                <p class="admin-card-sub">Crea una cuenta nueva. Define su rol y por cuánto tiempo será válida.</p>
+                <p class="admin-card-sub">Escribe un nombre y se creará una cuenta de usuario válida por 30 días.</p>
                 <form class="admin-form" id="adminCreateForm">
                     <div class="admin-form-row">
                         <label class="admin-form-label" for="adminNewUsername">Usuario</label>
                         <input type="text" id="adminNewUsername" class="admin-input" placeholder="nombre_usuario" required />
-                    </div>
-                    <div class="admin-form-row">
-                        <label class="admin-form-label" for="adminNewPassword">Contraseña</label>
-                        <input type="text" id="adminNewPassword" class="admin-input" placeholder="contraseña" required />
-                    </div>
-                    <div class="admin-form-row admin-form-row-split">
-                        <div>
-                            <label class="admin-form-label" for="adminNewRole">Rol</label>
-                            <select id="adminNewRole" class="admin-input" disabled title="Solo el dueño del proyecto puede crear administradores">
-                                <option value="user" selected>Usuario</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="admin-form-label" for="adminNewDuration">Duración (días)</label>
-                            <input type="number" id="adminNewDuration" class="admin-input" min="1" max="365" value="30" required />
-                        </div>
-                    </div>
-                    <div class="admin-form-row">
-                        <label class="admin-form-label">Icono del avatar</label>
-                        <div class="icon-picker" id="iconPicker">
-                            <button type="button" class="icon-option selected" data-icon="1.webp" aria-label="Icono 1">
-                                <img src="recursos/iconos/1.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="2.webp" aria-label="Icono 2">
-                                <img src="recursos/iconos/2.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="3.webp" aria-label="Icono 3">
-                                <img src="recursos/iconos/3.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="5.webp" aria-label="Icono 5">
-                                <img src="recursos/iconos/5.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="6.webp" aria-label="Icono 6">
-                                <img src="recursos/iconos/6.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="7.webp" aria-label="Icono 7">
-                                <img src="recursos/iconos/7.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="8.webp" aria-label="Icono 8">
-                                <img src="recursos/iconos/8.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="9.webp" aria-label="Icono 9">
-                                <img src="recursos/iconos/9.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="11.webp" aria-label="Icono 11">
-                                <img src="recursos/iconos/11.webp" alt="" />
-                            </button>
-                            <button type="button" class="icon-option" data-icon="22.webp" aria-label="Icono 22">
-                                <img src="recursos/iconos/22.webp" alt="" />
-                            </button>
-                        </div>
                     </div>
                     <div class="admin-form-actions">
                         <button type="submit" class="btn btn-primary" id="adminCreateBtn">Crear cuenta</button>
