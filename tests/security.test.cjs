@@ -88,6 +88,24 @@ test('admin can create a 30 day user with just a username', async () => {
   assert.equal(writes['users/new-user'].avatar, '1.webp');
   assert.equal(Math.round((writes['users/new-user'].expiresAt - before) / 86400000), 30);
 });
+test('admin can create a user with custom days', async () => {
+  const writes = {};
+  const context = ctx('owner');
+  context.services.auth.createUser = async () => ({ uid: 'custom-days-user' });
+  context.services.auth.deleteUser = async () => { throw Error('Unexpected delete'); };
+  context.services.db.ref = path => ({
+    get: async () => ({ val: () => null, exists: () => false }),
+    set: async value => { writes[path] = value; },
+    push: async value => { writes[path] = value; },
+    update: () => { throw Error('Unexpected update'); }
+  });
+  const before = Date.now();
+  const response = await handle(req({ action: 'create', username: 'Nuevo_User', daysValid: 45 }), context);
+  const body = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(body.daysValid, 45);
+  assert.equal(Math.round((writes['users/custom-days-user'].expiresAt - before) / 86400000), 45);
+});
 test('rejects invalid inputs and attempts to delete admin', async () => {
   assert.equal((await handle(req({ action: 'create', username: '../admin', password: '123' }), ctx('owner'))).status, 400);
   assert.equal((await handle(req({ action: 'delete', uid: 'owner' }), ctx('owner'))).status, 400);

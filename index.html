@@ -2219,11 +2219,15 @@
             <!-- Form para crear usuarios -->
             <article class="admin-card">
                 <h2 class="admin-card-title">Crear cuenta</h2>
-                <p class="admin-card-sub">Escribe un nombre y se creará una cuenta de usuario válida por 30 días.</p>
+                <p class="admin-card-sub">Escribe un nombre y la cantidad de días de acceso para crear la cuenta.</p>
                 <form class="admin-form" id="adminCreateForm">
                     <div class="admin-form-row">
                         <label class="admin-form-label" for="adminNewUsername">Usuario</label>
                         <input type="text" id="adminNewUsername" class="admin-input" placeholder="nombre_usuario" required />
+                    </div>
+                    <div class="admin-form-row">
+                        <label class="admin-form-label" for="adminNewDays">Días</label>
+                        <input type="number" id="adminNewDays" class="admin-input" min="1" max="365" step="1" value="30" required />
                     </div>
                     <div class="admin-form-actions">
                         <button type="submit" class="btn btn-primary" id="adminCreateBtn">Crear cuenta</button>
