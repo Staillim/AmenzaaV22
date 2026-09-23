@@ -1520,6 +1520,7 @@ function showSendSuccessToast(amount) {
         return item;
     }
     function renderCreatedAccountMessage(container, result, copied) {
+        const daysValid = Number.isInteger(result.daysValid) ? result.daysValid : 30;
         container.replaceChildren();
         const card = document.createElement('div');
         card.className = 'account-created-card';
@@ -1540,7 +1541,7 @@ function showSendSuccessToast(amount) {
         grid.append(
             createAccessItem('U', 'Usuario', result.username),
             createAccessItem('K', 'Contraseña', result.password),
-            createAccessItem('D', 'Duración', '30 días'),
+            createAccessItem('D', 'Duración', `${daysValid} días`),
             createAccessItem('E', 'Expira', formatAccountDate(result.expiresAt))
         );
         card.append(head, grid);
@@ -1553,12 +1554,15 @@ function showSendSuccessToast(amount) {
         setButtonLoading(btn, true, 'Creando...');
         const msg = document.getElementById('adminCreateMsg');
         try {
-            const result = await api('create', { username: document.getElementById('adminNewUsername').value.trim() });
-            const accessText = `Usuario: ${result.username}\nContraseña: ${result.password}\nDuración: 30 días\nExpira: ${formatAccountDate(result.expiresAt)}`;
+            const daysValid = Number.parseInt(document.getElementById('adminNewDays').value, 10);
+            const result = await api('create', { username: document.getElementById('adminNewUsername').value.trim(), daysValid });
+            const durationDays = Number.isInteger(result.daysValid) ? result.daysValid : daysValid;
+            const accessText = `Usuario: ${result.username}\nContraseña: ${result.password}\nDuración: ${durationDays} días\nExpira: ${formatAccountDate(result.expiresAt)}`;
             const copied = await copyAccountAccess(accessText).catch(() => false);
             renderCreatedAccountMessage(msg, result, copied);
             msg.className = 'admin-form-msg success';
             event.target.reset();
+            document.getElementById('adminNewDays').value = '30';
             await renderUsers();
         } catch (error) { msg.replaceChildren(error.message); msg.className = 'admin-form-msg error'; }
         finally { msg.hidden = false; setButtonLoading(btn, false); }

@@ -124,7 +124,7 @@ async function handle(request, context = {}) {
       try { await db.ref('users/' + account.uid).set(record); }
       catch (error) { await auth.deleteUser(account.uid); throw error; }
       await db.ref('audit').push({ actor: identity.uid, action: 'create', target: account.uid, at: Date.now() });
-      return response({ ok: true, username, password, expiresAt: record.expiresAt }, 201);
+      return response({ ok: true, username, password, daysValid, expiresAt: record.expiresAt }, 201);
     }
     if (['delete', 'resetDevice'].includes(body.action)) {
       if (typeof body.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.uid) || admins.has(body.uid)) fail(400, 'Cuenta no válida.');
